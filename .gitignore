@@ -1,0 +1,8 @@
+local/
+*.log
+pic/
+traindata/
+machine/
+model/
+__pycache__/
+~
