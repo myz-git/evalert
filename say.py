@@ -13,9 +13,12 @@ def speak(text,rate=220):
         print("Microsoft Huihui Desktop voice not found, using default.")
 
     # 设置语速
+    engine = pyttsx3.init()
+    engine.setProperty('voice', 'zh-CN')
+    engine.setProperty('volume', 4)
     engine.setProperty('rate', rate)
 
-    # 文本转语音
+    # 文本转语音3
     engine.say(text)
     engine.runAndWait()
 

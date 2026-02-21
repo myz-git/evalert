@@ -108,8 +108,7 @@ def find_icon(template, width, height, clf, scaler, max_attempts=3, offset_x=0, 
                 #pyautogui.moveTo(x, y)
                 return True
         attempts += 1        
-        # 为了整体扫描频率控制在约3秒，这里不再额外sleep
-        # time.sleep(0.2)
+        time.sleep(0.2)
         #scollscreen()
 
     if exflg:
@@ -146,8 +145,7 @@ def find_txt_ocr(txt,  max_attempts=5, region=None):
                 print(f"Interacted with agent {txt} at position ({x}, {y}).")
                 return True
         #print(data)  # 打印所有识别到的文字，看是否包括目标文字
-        # 为了整体扫描频率控制在约3秒，这里不再额外sleep
-        # time.sleep(0.5)
+        time.sleep(0.5)
         attempts += 1
         scollscreen()
         print(f"Attempt {attempts}/{max_attempts}: {txt} not found, retrying...")
@@ -196,7 +194,7 @@ def find_txt_ocr2(txt,  max_attempts=5, region=None):
     print(f"Attempt {attempts}/{max_attempts}: {txt} not found, retrying...")
         
 def find_txt_ocr3(txt,  max_attempts=1, region=None):
-    """使用OCR在屏幕特定区域查找，返回识别到的个数"""
+    """使用OCR在屏幕特定区域查找"""
 
     if region is None:
         fx, fy = pyautogui.size()
@@ -212,34 +210,24 @@ def find_txt_ocr3(txt,  max_attempts=1, region=None):
         # 打印OCR结果
         #print("OCR results:", res)
 
-        # 统计识别到的目标文字个数
-        count = 0
-        positions = []
-        
         # 遍历每一行的识别结果
         for line in res:
             if txt in line['text']:
-                count += 1
                 # 假设我们可以获取到文字的位置
                 x = region[0] + line['position'][0][0] + (line['position'][1][0] - line['position'][0][0]) // 2
                 y = region[1] + line['position'][0][1] + (line['position'][2][1] - line['position'][0][1]) // 2
-                positions.append((x, y))
-        
-        # 如果找到至少一个，返回个数
-        if count > 0:
-            print(f"识别到 {count} 个 '{txt}'，位置: {positions}")
-            # 移动鼠标到第一个位置（保持原有行为）
-            # if positions:
-            #     pyautogui.moveTo(positions[0][0], positions[0][1])
-            return count
             
+                # 移动鼠标并点击文字
+                pyautogui.moveTo(x, y)
+                
+                print(f"Interacted with agent {txt} at position ({x}, {y}).")
+                return True
         #print(data)  # 打印所有识别到的文字，看是否包括目标文字
-        # 为了整体扫描频率控制在约3秒，这里不再额外sleep
-        # time.sleep(0.5)
+        time.sleep(0.5)
         attempts += 1
-        # print(f"Attempt {attempts}/{max_attempts}: {txt} not found, retrying...")
+        print(f"Attempt {attempts}/{max_attempts}: {txt} not found, retrying...")
         
-    return 0
+    return False
 
 def load_location_name(tag):
     """从 JSON 格式的文件中读取位置名称。"""

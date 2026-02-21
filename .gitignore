@@ -4,5 +4,6 @@ pic/
 traindata/
 machine/
 model/
+static/
 __pycache__/
 ~
