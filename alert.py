@@ -1,18 +1,30 @@
+import sys
+import argparse
 import numpy as np
 import pyautogui
 import time
 from joblib import load
 from cnocr import CnOcr
+import cv2
+import os
+import pynput
+from datetime import datetime
 
 # 内部程序调用
 from say import speak
-from utils import scollscreen, capture_screen_area, predict_icon_status, load_model_and_scaler, find_icon, load_location_name, find_txt_ocr, find_txt_ocr2
+from utils import scollscreen, capture_screen_area, predict_icon_status, load_model_and_scaler, find_icon, load_location_name, find_txt_ocr, find_txt_ocr2, find_txt_ocr3
 from model_config import models, templates, screen_regions
 
 from pydub import AudioSegment
 from pydub.playback import play
 
 from pynput import keyboard
+
+# 预警模式: A=低安(只报警不规避), B=高安(触发后规避)
+MODE_A_LOWSEC = 'A'
+MODE_B_HIGHSEC = 'B'
+# 目标扫描间隔（秒），B 补足到此间隔，A 通过隔轮做 OCR 尽量接近
+TARGET_INTERVAL_SEC = 5.0
 
 
 class IconNotFoundException(Exception):
@@ -28,11 +40,30 @@ def play_sound_wav(file_path):
     sound = AudioSegment.from_file(file_path, format="wav")
     play(sound)
 
+def emergency_evasion(reason):
+    """
+    紧急规避函数
+    reason: 触发紧急规避的原因（字符串）
+    """
+    ctr = pynput.keyboard.Controller()
+    with ctr.pressed(pynput.keyboard.Key.ctrl, 's'):
+        print(f"[警报] {reason},紧急规避")
+        speak(f"{reason},紧急规避")
+        time.sleep(0.1)
+        pass
+    sys.exit(1)
+
 # 全局变量，用于控制程序是否继续运行
 running = True
 
 # 记录 Ctrl 键是否被按下
 ctrl_pressed = False
+
+# 调试模式：是否保存误识别截图
+DEBUG_MODE = False
+DEBUG_SAVE_DIR = "debug_icons"
+# 警告阈值：匹配值超过此值但未通过验证时显示警告（0.7表示70%相似度）
+WARNING_THRESHOLD = 0.75
 
 def on_press(key):
     global running, ctrl_pressed
@@ -51,51 +82,302 @@ def on_release(key):
     if key == keyboard.Key.ctrl_l or key == keyboard.Key.ctrl_r:
         ctrl_pressed = False
 
-def main():
+def find_icon_count(icon_name, template, width, height, clf, scaler, max_attempts=1, offset_x=0, offset_y=0, region=None, match_threshold=0.8, screen=None):
+    """
+    统计检测到的图标数量（包括同一类型的多个实例）
+    screen: 可选，已截好的区域图（与 region 对应）；传入则不再截屏，用于同轮多图标共屏，缩短 A 模式间隔
+    返回: (count, details_list)
+    """
+    if region is None:
+        fx, fy = pyautogui.size()
+        region = (0, 0, fx, fy)
+
+    attempts = 0
+    while attempts < max_attempts:
+        if screen is None:
+            screen = capture_screen_area(region)
+        res = cv2.matchTemplate(screen, template, cv2.TM_CCOEFF_NORMED)
+        
+        # 找到所有超过阈值的匹配位置
+        locations = np.where(res >= match_threshold)
+        found_count = 0
+        details_list = []
+        
+        # 对每个匹配位置进行验证
+        for pt in zip(*locations[::-1]):  # Switch x and y coordinates
+            match_val = res[pt[1], pt[0]]
+            
+            # 提取图标区域
+            icon_image = screen[pt[1]:pt[1] + height, pt[0]:pt[0] + width]
+            
+            # 检查图标区域是否有效
+            if icon_image.shape[0] != height or icon_image.shape[1] != width:
+                continue
+            
+            # 使用模型验证
+            model_result = predict_icon_status(icon_image, clf, scaler)
+            
+            if model_result:
+                x = pt[0] + region[0] + width // 2 + offset_x
+                y = pt[1] + region[1] + height // 2 + offset_y
+                
+                details = {
+                    'icon_name': icon_name,
+                    'match_val': match_val,
+                    'model_prediction': model_result,
+                    'position': (x, y)
+                }
+                details_list.append(details)
+                found_count += 1
+                
+                # 如果启用调试模式，保存检测到的图标截图
+                if DEBUG_MODE:
+                    save_debug_image(icon_name, icon_image, match_val, model_result, True)
+            else:
+                # 模板匹配成功但模型验证失败，可能是误识别
+                if DEBUG_MODE:
+                    save_debug_image(icon_name, icon_image, match_val, model_result, False)
+        
+        if found_count > 0:
+            return found_count, details_list
+
+        attempts += 1
+        # 不再 sleep，由主循环统一控制间隔，避免 A 模式多检一次图标导致多 0.2s
+
+    return 0, []
+
+def find_icon_detailed(icon_name, template, width, height, clf, scaler, max_attempts=1, offset_x=0, offset_y=0, region=None):
+    """
+    详细检测图标，返回检测结果和详细信息（保留用于兼容性）
+    返回: (found, details)
+    details包含: match_val, model_prediction, position等
+    """
+    count, details_list = find_icon_count(icon_name, template, width, height, clf, scaler, max_attempts, offset_x, offset_y, region)
+    if count > 0:
+        return True, details_list[0]  # 返回第一个检测到的图标信息
+    else:
+        return False, {'icon_name': icon_name, 'match_val': 0, 'model_prediction': False, 'position': None, 'found': False}
+
+def save_debug_image(icon_name, icon_image, match_val, model_prediction, is_correct):
+    """保存调试截图"""
+    if not os.path.exists(DEBUG_SAVE_DIR):
+        os.makedirs(DEBUG_SAVE_DIR)
+    
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    status = "correct" if is_correct else "false_positive"
+    filename = f"{icon_name}_{status}_match{match_val:.3f}_model{model_prediction}_{timestamp}.png"
+    filepath = os.path.join(DEBUG_SAVE_DIR, filename)
+    cv2.imwrite(filepath, icon_image)
+    print(f"[调试] 已保存截图: {filepath}")
+
+def find_txt_ocr3_debug(txt, max_attempts=1, region=None):
+    """
+    带调试功能的OCR文字识别
+    返回: (found, all_ocr_texts)
+    """
+    from cnocr import CnOcr
+    
+    if region is None:
+        fx, fy = pyautogui.size()
+        region = (0, 0, fx, fy)
+
+    attempts = 0
+    all_ocr_texts = []
+    
+    while attempts < max_attempts:        
+        # 初始化OCR工具
+        ocr = CnOcr(rec_model_name='scene-densenet_lite_246-gru_base')
+        screen_image = pyautogui.screenshot(region=region)
+        res = ocr.ocr(screen_image)  # 使用 ocr 方法处理整个图像
+        
+        # 收集所有识别到的文字
+        current_texts = []
+        for line in res:
+            text = line['text']
+            current_texts.append(text)
+            all_ocr_texts.append(text)
+            
+            # 检查是否包含目标文字
+            if txt in text:
+                x = region[0] + line['position'][0][0] + (line['position'][1][0] - line['position'][0][0]) // 2
+                y = region[1] + line['position'][0][1] + (line['position'][2][1] - line['position'][0][1]) // 2
+                pyautogui.moveTo(x, y)
+                print(f"[OCR] 找到文字 {txt} 在位置 ({x}, {y})")
+                return True, ' | '.join(all_ocr_texts)
+        
+        attempts += 1
+        time.sleep(0.5)
+    
+    # 返回所有识别到的文字，用 | 分隔
+    return False, ' | '.join(all_ocr_texts) if all_ocr_texts else ''
+
+def main(mode=MODE_A_LOWSEC):
+    """
+    mode: 'A' 低安预警 - 只报警不规避，多监控「中立声望」
+          'B' 高安预警 - 触发后进行规避
+    """
     global running
+
+    if mode not in (MODE_A_LOWSEC, MODE_B_HIGHSEC):
+        mode = MODE_A_LOWSEC
+    mode_name = "低安预警(只报警)" if mode == MODE_A_LOWSEC else "高安预警(可规避)"
+    print(f"[模式] {mode_name} (mode={mode})")
 
     # 开始监听键盘事件
     listener = keyboard.Listener(on_press=on_press, on_release=on_release)
     listener.start()
 
     while running:
-        time.sleep(2)
-        
-        # 加载"中立声望"模型和模板
-        clf_zhongli, scaler_zhongli = models['zhongli']
-        template_zhongli, w_zhongli, h_zhongli = templates['zhongli']
+        loop_start = time.time()
 
-        # 加载"嫌犯声望"模型和模板
+        # 加载共用模型（高安/低安都用的）
         clf_xianfan, scaler_xianfan = models['xianfan']
         template_xianfan, w_xianfan, h_xianfan = templates['xianfan']
+        clf_zuifan, scaler_zuifan = models['zuifan']
+        template_zuifan, w_zuifan, h_zuifan = templates['zuifan']
+        clf_jisha, scaler_jisha = models['jisha']
+        template_jisha, w_jisha, h_jisha = templates['jisha']
+
+        # A模式多一项：中立声望
+        if mode == MODE_A_LOWSEC:
+            clf_zhongli, scaler_zhongli = models['zhongli']
+            template_zhongli, w_zhongli, h_zhongli = templates['zhongli']
 
         # 设置需要捕获的屏幕区域
         fx, fy = pyautogui.size()
-        
-        # 左侧面板
         left_panel = screen_regions['left_panel']
-        # 中间面板
         center_panel = screen_regions['center_panel']
-        # 右侧面板
         right_panel = screen_regions['right_panel']
 
-        # 1. 准备开始
-        
-        # 查找[中立声望]或[嫌犯声望]
-        try: 
-            if (find_icon(template_zhongli, w_zhongli, h_zhongli, clf_zhongli, scaler_zhongli, 1, 0, 0, right_panel) or 
-                find_icon(template_xianfan, w_xianfan, h_xianfan, clf_xianfan, scaler_xianfan, 1, 0, 0, right_panel)):  
-                print("发现中立声望或嫌犯声望")
-                play_sound_wav('soundlow.wav')  # 播放声音文件('sound.wav')  
-                # speak("本地有白名")
-                # speak("滴滴")
-                # pyautogui.press('v')
+        try:
+            ctr = pynput.keyboard.Controller()
+
+            # 使用鼠标中键触发雷达扫描：按住0.2秒再松开
+            pyautogui.mouseDown(button='middle')
+            print("雷达扫描进行中...")
+            time.sleep(0.2)
+            pyautogui.mouseUp(button='middle')
+
+            total_icon_count = 0
+            icon_details_summary = []
+
+            # 每轮只截屏一次，供所有图标检测共用，缩短 A 模式间隔（否则 A 多一次截屏+匹配约 5s）
+            screen = capture_screen_area(right_panel)
+
+            # A模式：检测「中立声望」
+            if mode == MODE_A_LOWSEC:
+                zhongli_count, zhongli_details_list = find_icon_count(
+                    "zhongli", template_zhongli, w_zhongli, h_zhongli,
+                    clf_zhongli, scaler_zhongli, 1, 0, 0, right_panel, screen=screen
+                )
+                if zhongli_count > 0:
+                    total_icon_count += zhongli_count
+                    for detail in zhongli_details_list:
+                        icon_details_summary.append(("中立", detail))
+                        # print(f"[检测] 中立声望 - 匹配值: {detail['match_val']:.3f}, "
+                        #       f"模型预测: {detail['model_prediction']}, "
+                        #       f"位置: {detail['position']}")
+
+            # 检测「罪犯声望」
+            zuifan_count, zuifan_details_list = find_icon_count(
+                "zuifan", template_zuifan, w_zuifan, h_zuifan,
+                clf_zuifan, scaler_zuifan, 1, 0, 0, right_panel, screen=screen
+            )
+            if zuifan_count > 0:
+                total_icon_count += zuifan_count
+                for detail in zuifan_details_list:
+                    icon_details_summary.append(("罪犯", detail))
+                    print(f"[检测] 罪犯声望 - 匹配值: {detail['match_val']:.3f}, "
+                          f"模型预测: {detail['model_prediction']}, "
+                          f"位置: {detail['position']}")
+
+            # 检测「击杀权限」
+            jisha_count, jisha_details_list = find_icon_count(
+                "jisha", template_jisha, w_jisha, h_jisha,
+                clf_jisha, scaler_jisha, 1, 0, 0, right_panel, screen=screen
+            )
+            if jisha_count > 0:
+                total_icon_count += jisha_count
+                for detail in jisha_details_list:
+                    icon_details_summary.append(("击杀", detail))
+                    print(f"[检测] 击杀权限 - 匹配值: {detail['match_val']:.3f}, "
+                          f"模型预测: {detail['model_prediction']}, "
+                          f"位置: {detail['position']}")
+
+            # 检测「嫌犯声望」
+            xianfan_count, xianfan_details_list = find_icon_count(
+                "xianfan", template_xianfan, w_xianfan, h_xianfan,
+                clf_xianfan, scaler_xianfan, 1, 0, 0, right_panel, screen=screen
+            )
+            if xianfan_count > 0:
+                total_icon_count += xianfan_count
+                for detail in xianfan_details_list:
+                    icon_details_summary.append(("嫌犯", detail))
+                    print(f"[检测] 嫌犯声望 - 匹配值: {detail['match_val']:.3f}, "
+                          f"模型预测: {detail['model_prediction']}, "
+                          f"位置: {detail['position']}")
+
+            icon_found = total_icon_count > 0
+
+            # 文字识别：「促进」。仅 B 模式检测，A 模式不检测促进
+            if mode == MODE_A_LOWSEC:
+                txt_count = 0
+                txt_found = False
+            else:
+                txt_count = find_txt_ocr3("促进", 1, right_panel)
+                txt_found = txt_count >= 2
+
+            total_danger_count = total_icon_count + txt_count
+
+            # 任一触发则声音告警
+            if icon_found or txt_found:
+                play_sound_wav('soundlow.wav')
+                if icon_found:
+                    icon_summary = {}
+                    for name, _ in icon_details_summary:
+                        icon_summary[name] = icon_summary.get(name, 0) + 1
+                    parts = [f"{c}个 {n}单位" for n, c in icon_summary.items()]
+                    print(f"[警报] 发现图标: {'、'.join(parts)}")
+                if txt_found:
+                    print(f"[警报] 发现 {txt_count} 个促进级舰船")
+
+            # B模式：达到 2 个及以上危险项时紧急规避
+            if mode == MODE_B_HIGHSEC and total_danger_count >= 2:
+                danger_items = []
+                if total_icon_count > 0:
+                    icon_summary = {}
+                    for name, _ in icon_details_summary:
+                        icon_summary[name] = icon_summary.get(name, 0) + 1
+                    icon_str = ', '.join([f"{name}{count}个" if count > 1 else name for name, count in icon_summary.items()])
+                    danger_items.append(f"图标{icon_str}(共{total_icon_count}个)")
+                if txt_count > 0:
+                    danger_items.append(f"促进级舰船{txt_count}个")
+                reason = f"发现{'、'.join(danger_items)}"
+                emergency_evasion(reason)
+
+            if icon_found or txt_found:
                 time.sleep(2)
+
         except IconNotFoundException as e:
             print(e)
 
-    listener.join()  # 等待监听器结束
-    
+        # 统一补足到约 TARGET_INTERVAL_SEC 秒一轮（B 约 2.4s 补到 5s，A 不检促进约 5s）
+        elapsed = time.time() - loop_start
+        time.sleep(max(0, TARGET_INTERVAL_SEC - elapsed))
+
+    listener.join()
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="EVE 本地预警: -a 低安(只报警) -b 高安(可规避)")
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument("-a", "-A", dest="lowsec", action="store_true", help="低安预警: 只报警不规避，含中立声望")
+    group.add_argument("-b", "-B", dest="highsec", action="store_true", help="高安预警: 触发后规避")
+    args = parser.parse_args()
+    # 未指定或 -a 为 A，-b 为 B；默认 A
+    return MODE_B_HIGHSEC if args.highsec else MODE_A_LOWSEC
+
+
 if __name__ == "__main__":
-    main()
-v
+    mode = parse_args()
+    main(mode)

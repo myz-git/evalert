@@ -1,14 +1,21 @@
 ## 项目名称
 
-EVE本地预警
+EVE 本地预警（evalert）
 
 ## 项目目的
 
-监控本地玩家列表,当出现中立,糟糕,不良玩家,进行声音,微信等方式预警;
+监控本地玩家列表：当出现中立、嫌犯、罪犯、击杀权限或促进级舰船等目标时，进行声音预警；高安模式可在达到条件时自动执行紧急规避（Ctrl+S 并退出）。
 
-## 项目架构
+## 主要文件
 
-
+- **alert.py** — 主程序，支持 A（低安）/ B（高安）两种模式
+- **model_config.py** — 模型与屏幕区域配置
+- **utils.py** — 截屏、图标检测、OCR、模板匹配等
+- **say.py** — 语音播报
+- **icon/** — 图标模板（如 zhongli-1.png、jisha-1.png）
+- **model/** — 训练好的分类模型与 scaler
+- **traindata/** — 训练正负样本（如 jisha-1、jisha-0）
+- **evalert.spec** — PyInstaller 打包配置
 
 ## 环境准备
 
@@ -27,6 +34,8 @@ pip install keyboard
 
 pip install pydub simpleaudio
 pip install pynput
+
+pip install pyinstaller
 ```
 
 ## 训练模型
@@ -72,24 +81,50 @@ model/scaler_xianfan.joblib
 
 
 
+## 主程序
+
+主入口为 **alert.py**。
+
+### 运行方式
+
+```bash
+python alert.py        # 默认 A 模式（低安）
+python alert.py -a     # A 模式
+python alert.py -b     # B 模式（高安）
+```
+
+### 两种模式
+
+| 项目       | A 模式（低安）           | B 模式（高安）                 |
+|------------|--------------------------|--------------------------------|
+| 参数       | 默认或 `-a` / `-A`      | `-b` / `-B`                    |
+| 监控项     | 中立、嫌犯、罪犯、击杀（图标） | 嫌犯、罪犯、击杀（图标）+ 文字「促进」 |
+| 触发后行为 | 仅声音告警               | 声音告警；危险数 ≥2 时执行紧急规避并退出 |
+| 扫描间隔   | 约 5 秒/轮               | 约 5 秒/轮                     |
+
+- **A 模式**：不检测「促进」文字，只做图标检测；任一监控项触发即播放 `soundlow.wav`。
+- **B 模式**：图标 + OCR 检测「促进」；当图标与「促进」合计 ≥2 时执行紧急规避（Ctrl+S、语音提示后退出）。
+
+### 快捷键
+
+- **Ctrl + F12**：停止程序。
+
+### 打包后运行
+
+`pyinstaller evalert.spec` 生成 `evalert.exe` 后，运行 exe 等同默认执行 `python alert.py`（A 模式）。若需 B 模式，需通过命令行传入参数（取决于打包是否支持）。
+
 ## 误检处理
 
-打开debug   line 41:
-DEBUG_MODE = True
+1. 在 **alert.py** 中打开调试（约第 56 行）：`DEBUG_MODE = True`
+2. 运行 alert.py，误检时的截图会保存到 **debug_icons** 目录
+3. 将误检截图复制到对应负样本目录，例如 `traindata\jisha-0`
+4. 若需重命名：`python rename.py jisha`
+5. 使用负样本重新训练：`python train2stat.py jisha`
 
-执行alert2.py, 当触发误检后,误检图片会放到debug_icons下
+## 打包
 
-将误检图片 移到 负样本目录中,如  traindata\jisha-0
-
-执行重命名文件
-
-```
-python rename.py  jish-0
-```
-
-使用train2stat.py 训练模型:
-
-```
-python train2stat.py jisha
+```bash
+pyinstaller evalert.spec
 ```
 
+将生成的 **evalert.exe** 与 `soundlow.wav`、`icon`、`model` 等依赖放在同一目录后运行。详见 spec 内 datas 配置。

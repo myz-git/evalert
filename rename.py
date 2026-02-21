@@ -3,7 +3,7 @@ import glob
 import argparse
 import logging
 
-# 日志配置，与train.py, task.py等一致
+# 日志配置
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',

@@ -1,9 +1,13 @@
-local/
 *.log
+local/
 pic/
 traindata/
 machine/
 model/
+build/
+debug_icons/
+dist/
 static/
+static2/
 __pycache__/
 ~
