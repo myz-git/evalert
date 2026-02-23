@@ -9,6 +9,7 @@ import cv2
 import os
 import pynput
 from datetime import datetime
+from utils import find_txt_ocr
 
 
 # 内部程序调用
@@ -76,7 +77,7 @@ def emergency_evasion(reason):
     ctr = pynput.keyboard.Controller()
     with ctr.pressed(pynput.keyboard.Key.ctrl, 's'):
         print(f"[警报] {reason},紧急规避")
-        speak(f"{reason},紧急规避")
+        speak("执行自动导航")
         time.sleep(0.1)
         pass
     sys.exit(1)
@@ -275,6 +276,7 @@ def main(mode=MODE_A_LOWSEC):
         fx, fy = pyautogui.size()
         left_panel = screen_regions['left_panel']
         center_panel = screen_regions['center_panel']
+        center_panel2 = screen_regions['center_panel2']
         right_panel = screen_regions['right_panel']
 
         try:
@@ -367,7 +369,7 @@ def main(mode=MODE_A_LOWSEC):
                     parts = [f"{c}个 {n}单位" for n, c in icon_summary.items()]
                     print(f"[警报] 发现图标: {'、'.join(parts)}")
                 if txt_found:
-                    print(f"[警报] 发现 {txt_count} 个促进级舰船")
+                    print(f"[警报] 发现 {txt_count} 个可疑舰船")
 
             # B模式：达到 2 个及以上危险项时紧急规避
             if mode == MODE_B_HIGHSEC and total_danger_count >= 2:
@@ -379,9 +381,10 @@ def main(mode=MODE_A_LOWSEC):
                     icon_str = ', '.join([f"{name}{count}个" if count > 1 else name for name, count in icon_summary.items()])
                     danger_items.append(f"图标{icon_str}(共{total_icon_count}个)")
                 if txt_count > 0:
-                    danger_items.append(f"促进级舰船{txt_count}个")
+                    danger_items.append(f"可疑舰船{txt_count}个")
                 reason = f"发现{'、'.join(danger_items)}"
-                emergency_evasion(reason)
+                #emergency_evasion(reason)
+                emergency_evade_pin999(center_panel2)
 
             if icon_found or txt_found:
                 time.sleep(2)
@@ -395,6 +398,71 @@ def main(mode=MODE_A_LOWSEC):
 
     listener.join()
 
+
+def emergency_evade_pin999(
+    place_region=None,
+    open_key='l',
+    pin_text='PIN999',
+    action_text='带领舰队',
+    fallback_action_text='跃迁至',
+):
+    """
+    紧急规避（新）：
+      1) 按 l 打开“地点”面板
+      2) 找到 PIN999（可能多个，取第一个），鼠标移上去，右键
+      3) 在右键菜单优先找“带领舰队”（可能多个，取第一个）并点击；
+         若失败，再找“跳跃至”（取第一个）并点击；
+         若仍失败，回退 emergency_evasion()（Ctrl+S）并退出
+
+    依赖：
+      - speak(text)
+      - emergency_evasion(reason)  # 内部应执行 Ctrl+S 并退出
+      - find_txt_ocr(text, 1, region)  # 找到后会把鼠标移动到文字上，并返回 True/False
+      - pyautogui
+      - time, sys
+    """
+    speak("紧急规避,发现可疑舰船")
+
+    # 1) 打开地点面板
+    pyautogui.press(open_key)
+    time.sleep(0.2)
+
+    # 2) 找 PIN999（第一个）并右键
+    ok = find_txt_ocr(pin_text, 1, place_region,allow_scroll=False) if place_region else find_txt_ocr(pin_text, 1,allow_scroll=False)
+    if not ok:
+        speak("未找到安全点")
+        emergency_evasion('未找到安全点')
+        return
+
+    pyautogui.click(button='right')
+    time.sleep(0.2)
+
+    # 3) 在右键菜单区域优先找“带领舰队”，失败则找“跳跃至”
+    mx, my = pyautogui.position()
+    menu_regions = [
+        (max(mx - 40, 0), max(my - 10, 0), 520, 560),   # 常规：鼠标右侧/下方
+        (max(mx - 520, 0), max(my - 10, 0), 520, 560),  # 兜底：菜单翻到左侧
+    ]
+
+    def _find_and_click_first(menu_text: str) -> bool:
+        for r in menu_regions:
+            okx = find_txt_ocr(menu_text, 1, r,allow_scroll=False)  # 找到会 moveTo
+            if okx:
+                pyautogui.click(button='left')
+                time.sleep(0.15)
+                return True
+        return False
+
+    if _find_and_click_first(action_text):
+        speak("紧急规避已启动,程序终止")
+        sys.exit(1)
+
+    if _find_and_click_first(fallback_action_text):
+        speak("紧急规避已启动,程序终止")
+        sys.exit(1)
+
+    # 都失败：回退
+    emergency_evasion('规避失败,未找到跳跃目标,执行自动导航')
 
 def parse_args():
     parser = argparse.ArgumentParser(description="EVE 本地预警: -a 低安(只报警) -b 高安(可规避)")

@@ -116,7 +116,7 @@ def find_icon(template, width, height, clf, scaler, max_attempts=3, offset_x=0, 
         raise IconNotFoundException("未找到目标,程序退出")
     return False
 
-def find_txt_ocr(txt,  max_attempts=5, region=None):
+def find_txt_ocr(txt,  max_attempts=5, region=None,allow_scroll=True):
     """使用OCR在屏幕特定区域查找"""
 
     if region is None:
@@ -149,7 +149,8 @@ def find_txt_ocr(txt,  max_attempts=5, region=None):
         # 为了整体扫描频率控制在约3秒，这里不再额外sleep
         # time.sleep(0.5)
         attempts += 1
-        scollscreen()
+        if allow_scroll:
+            scollscreen()
         print(f"Attempt {attempts}/{max_attempts}: {txt} not found, retrying...")
         
     return False

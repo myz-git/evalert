@@ -4,7 +4,11 @@ import sys
 from joblib import load
 
 def resource_path(rel_path: str) -> str:
-    # PyInstaller: sys._MEIPASS 指向 dist\evalert (onedir) 或临时解包目录 (onefile)
+    """
+    资源路径兼容：
+    - 开发环境：基于当前文件所在目录
+    - PyInstaller 打包：基于 sys._MEIPASS（_internal 解包目录）
+    """
     base = getattr(sys, "_MEIPASS", os.path.abspath(os.path.dirname(__file__)))
     return os.path.join(base, rel_path)
 
@@ -18,7 +22,6 @@ def load_template(icon_path):
     return template, template.shape[1], template.shape[0]
 
 
-
 # 模型和模板加载
 """
 zhongli 中立声望
@@ -29,9 +32,9 @@ jiaozhan    交战声望
 jisha  击杀权限
 """
 # 定义图标模板和模型路径
-# 关键：把相对目录改成可运行的绝对目录
-base_path = resource_path("model")
-icon_base_path = resource_path("icon")
+# 关键：把相对路径改为可搬迁路径
+base_path = resource_path('model')
+icon_base_path = resource_path('icon')
 
 model_names = ['zhongli', 'xianfan', 'buliang', 'zuifan', 'jisha']
 models = {name: load_model_and_scaler(base_path, name) for name in model_names}
@@ -42,5 +45,6 @@ templates = {name: load_template(os.path.join(icon_base_path, f"{name}-1.png")) 
 screen_regions = {
     'left_panel': (30, 30, 300, 800),  # 左侧面板
     'center_panel': (300, 30, 800, 800),  # 中间面板
+    'center_panel2': (200, 30,1200, 800),  # 中间面板2
     'right_panel': (1000, 30, 700, 1000)  # 右侧面板
 }
