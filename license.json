@@ -1,0 +1,15 @@
+{
+  "ver": 1,
+  "sub": "客户名",
+  "nbf": "2026-02-22T18:26:55.054727+00:00",
+  "exp": "2026-12-31T00:00:00+00:00",
+  "machine": "50a2a2a809892e31d6aea8dc5411cba657947eb71b33bd74febb5edec70ba2a0",
+  "features": {
+    "trial": false,
+    "webhook": true,
+    "tts": true,
+    "max_check_interval_sec": 2
+  },
+  "issued_at": "2026-02-22T18:26:55.054727+00:00",
+  "sig": "107NHB3vpVG9jnkzldW1QUYVk7fz9uBDeCt06A/h82GibgfPL65OjMhZu7eu2szAyvyqQZ/oSxA6yDzu7kDWBg=="
+}

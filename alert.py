@@ -10,6 +10,7 @@ import os
 import pynput
 from datetime import datetime
 
+
 # 内部程序调用
 from say import speak
 from utils import scollscreen, capture_screen_area, predict_icon_status, load_model_and_scaler, find_icon, load_location_name, find_txt_ocr, find_txt_ocr2, find_txt_ocr3
@@ -19,6 +20,27 @@ from pydub import AudioSegment
 from pydub.playback import play
 
 from pynput import keyboard
+
+########################################################
+# license 授权验证
+from licensing.license_verify import check_license_or_trial, get_request_code
+
+st = check_license_or_trial()
+if not st.ok:
+    print(st.message)
+    print("RequestCode:", get_request_code())
+    raise SystemExit(2)
+
+if st.ok and st.mode == "licensed":
+    exp_str = st.exp.date().isoformat() if st.exp else "未知"
+    print(f"license已授权,到期时间 {exp_str}")
+elif st.ok and st.mode == "trial":
+    exp_str = st.exp.date().isoformat() if st.exp else "未知"
+    print(f"试用模式,到期时间 {exp_str}（剩余 {st.days_left} 天）")
+else:
+    # 失败逻辑你原来怎么处理就怎么处理
+    print(st.message)
+########################################################
 
 # 预警模式: A=低安(只报警不规避), B=高安(触发后规避)
 MODE_A_LOWSEC = 'A'
@@ -35,8 +57,14 @@ class GoodsNotFoundException(Exception):
     """Exception raised when the specified goods are not found."""
     pass
 
+
+def resource_path(rel_path: str) -> str:
+    base = getattr(sys, "_MEIPASS", os.path.abspath(os.path.dirname(__file__)))
+    return os.path.join(base, rel_path)
+
 # 加载并播放音频
 def play_sound_wav(file_path):
+    file_path = resource_path(file_path)   # ✅ 关键
     sound = AudioSegment.from_file(file_path, format="wav")
     play(sound)
 

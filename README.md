@@ -36,6 +36,7 @@ pip install pydub simpleaudio
 pip install pynput
 
 pip install pyinstaller
+pip install cryptography
 ```
 
 ## 训练模型
@@ -123,8 +124,116 @@ python alert.py -b     # B 模式（高安）
 
 ## 打包
 
+
+
 ```bash
-pyinstaller evalert.spec
+#清理
+cd /d D:\Workspace\git\evalert
+rmdir /s /q build
+rmdir /s /q dist
+del /q *.spec.bak 2>nul
+
+#打包
+pyinstaller --clean -y evalert.spec
 ```
 
 将生成的 **evalert.exe** 与 `soundlow.wav`、`icon`、`model` 等依赖放在同一目录后运行。详见 spec 内 datas 配置。
+
+
+
+
+
+## 关于license授权
+
+### 功能说明: 
+
+1. 密钥生成（只做一次）
+2. License 生成脚本（离线签发给用户）
+3. 客户端校验模块
+4. 试用 30 天的实现
+5. 依赖：用 cryptography
+
+注意: `keys/ed25519_private.key` 永远不要进仓库，也不要被 spec 的 datas 收进去
+
+让用户把 `license.json` 放到 `evalert.exe` 同级目录即可。
+
+程序也会尝试读 `%ProgramData%\evalert\license.json`
+
+spec 里不需要打包 license（除非你要内置试用 license）
+
+### 程序说明:
+
+licensing/
+  keygen.py           # 自己用：生成 ed25519 私钥/公钥（只跑一次）
+  license_gen.py      # 自己用：生成 license.json（发给客户）
+  license_verify.py   # 程序端：校验license + 试用逻辑
+
+ fingerprint.py  #获得机器指纹,然后打包生成exe文件,发给用户执行得到机器指纹
+
+```
+pyinstaller -y -F fingerprint.py --name evalert-fingerprint --console
+```
+
+ fingerprint_gui.py #获得机器指纹GUI界面
+
+```
+pyinstaller -y -F fingerprint_gui.py --name evalert-fingerprint --noconsole
+```
+
+### 生成密钥:
+
+1）生成密钥（只做一次）
+
+```
+pip install cryptography
+python licensing\keygen.py
+```
+
+得到：
+
+- `keys\ed25519_private.key`（私钥：自己留着，别进仓库）
+- `keys\ed25519_public.key`（公钥：要贴进程序）
+
+2）把公钥贴进程序
+
+打开 `licensing\license_verify.py`，把这一行替换成你生成的公钥内容
+
+```
+PUBLIC_KEY_B64 = "PASTE_YOUR_PUBLIC_KEY_BASE64_HERE"
+```
+
+如果没有 license.json：会自动进入试用 30 天，并把试用状态写到 C:\ProgramData\evalert\trial_state.json
+
+### 签发正式 license
+
+#### 1. 用户查询机器指纹
+
+##### a).  用户使用evalert-fingerprint.exe
+
+双击执行  evalert-fingerprint.exe 得到机器指纹
+
+##### b).  或者用户直接运行命令
+
+ 在 PowerShell 执行,输出的 64 位 hex 字符串就是机器指纹
+
+```
+$g=(Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Cryptography').MachineGuid
+$bytes=[Text.Encoding]::UTF8.GetBytes($g)
+$sha=[System.Security.Cryptography.SHA256]::Create()
+($sha.ComputeHash($bytes) | ForEach-Object { $_.ToString("x2") }) -join ""
+```
+
+#### 2. 签发正式 license
+
+离线生成 `license.json`
+
+```
+python .\licensing\license_gen.py `
+  --priv .\keys\ed25519_private.key `
+  --subject "客户名" `
+  --exp 2099-12-31 `
+  --machine 50a2a2a809892e31d6aea8dc5411cba657947eb71b33bd74febb5edec70ba2a0 `
+  --out .\license.json
+```
+
+将生成的license.json 发给客户,并与evalert.exe放在一起

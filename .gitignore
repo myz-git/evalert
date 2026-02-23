@@ -5,9 +5,11 @@ traindata/
 machine/
 model/
 build/
-debug_icons/
 dist/
+debug_icons/
 static/
 static2/
 __pycache__/
+licensing/
+keys/
 ~
